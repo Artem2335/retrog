@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Браузерный Ретро-Шутер (Мышь + Убийства)</title>
+    <title>Браузерный Ретро-Шутер (Мышь + Убийства + Эффекты)</title>
     <style>
         body {
             margin: 0; padding: 0; background-color: #000;
@@ -85,7 +85,7 @@
     <div id="ui-layer">
         <div class="hud-top">
             <div id="health">ЗДОРОВЬЕ: 100</div>
-            <div id="kills">УБИТО: 0/5</div>
+            <div id="kills">УБИТО: 0/0</div>
             <div id="ammo">ПАТРОНЫ: 8/8</div>
         </div>
         <div class="hud-bottom">
@@ -158,14 +158,21 @@
             cx.beginPath(); cx.arc(56,56,3,0,Math.PI*2); cx.fill();
         });
 
-        // Спрайты врага
-        const texEnemy = createTexture(cx => {
-            cx.fillStyle = '#cc0000'; cx.beginPath(); cx.arc(32,28,24,0,Math.PI*2); cx.fill();
-            cx.fillStyle = '#fff'; cx.beginPath(); cx.arc(32,24,12,0,Math.PI*2); cx.fill();
-            cx.fillStyle = '#000'; cx.beginPath(); cx.arc(32,24,5,0,Math.PI*2); cx.fill();
-            cx.fillStyle = '#222'; cx.fillRect(20, 40, 24, 8);
-            cx.fillStyle = '#fff'; cx.fillRect(22, 40, 4, 4); cx.fillRect(28, 40, 4, 4); cx.fillRect(34, 40, 4, 4);
-        });
+        // Спрайты врагов разных типов
+        function createEnemyTexture(baseColor) {
+            return createTexture(cx => {
+                cx.fillStyle = baseColor; cx.beginPath(); cx.arc(32,28,24,0,Math.PI*2); cx.fill();
+                cx.fillStyle = '#fff'; cx.beginPath(); cx.arc(32,24,12,0,Math.PI*2); cx.fill();
+                cx.fillStyle = '#000'; cx.beginPath(); cx.arc(32,24,5,0,Math.PI*2); cx.fill();
+                cx.fillStyle = '#222'; cx.fillRect(20, 40, 24, 8);
+                cx.fillStyle = '#fff'; cx.fillRect(22, 40, 4, 4); cx.fillRect(28, 40, 4, 4); cx.fillRect(34, 40, 4, 4);
+            });
+        }
+        
+        const texEnemyRed = createEnemyTexture('#cc0000');
+        const texEnemyGreen = createEnemyTexture('#00aa00');
+        const texEnemyBlue = createEnemyTexture('#0000cc');
+        
         const texEnemyHurt = createTexture(cx => {
             cx.fillStyle = '#fff'; cx.beginPath(); cx.arc(32,28,24,0,Math.PI*2); cx.fill();
         });
@@ -174,30 +181,50 @@
             cx.fillStyle = '#520101'; cx.beginPath(); cx.ellipse(32, 54, 15, 5, 0, 0, Math.PI*2); cx.fill();
         });
 
-        // --- ИГРОВАЯ КАРТА ---
-        const mapWidth = 16; const mapHeight = 16;
-        const worldMap = [
-            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-            [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1],
-            [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1],
-            [1,0,0,0,0,0,1,0,0,2,2,0,0,0,0,1],
-            [1,0,0,2,2,0,1,0,0,2,0,0,0,0,0,1],
-            [1,0,0,2,0,0,0,0,0,2,0,0,0,0,0,1],
-            [1,0,0,2,0,0,0,0,0,0,0,0,0,0,0,1],
-            [1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1],
-            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-            [1,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1],
-            [1,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1],
-            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-            [1,0,0,0,0,0,0,0,0,0,0,2,2,2,0,1],
-            [1,0,0,0,0,0,0,0,0,0,0,2,0,0,0,1],
-            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
-        ];
+        // Функция выбора текстуры в зависимости от состояния и типа
+        function getEnemyTexture(enemy) {
+            if (enemy.state === 'dead') return texEnemyDead;
+            if (enemy.hurtTimer > 0) return texEnemyHurt;
+            if (enemy.type === 'green') return texEnemyGreen;
+            if (enemy.type === 'blue') return texEnemyBlue;
+            return texEnemyRed;
+        }
 
-        // --- ИГРОК И ВРАГИ ---
+        // --- ПРОЦЕДУРНАЯ ГЕНЕРАЦИЯ КАРТЫ ---
+        const mapWidth = 24; const mapHeight = 24;
+        const worldMap = Array.from({length: mapHeight}, () => Array(mapWidth).fill(1));
+        let floorCells = [];
+        
+        // Алгоритм "Случайное блуждание" (Drunkard's walk)
+        let px = Math.floor(mapWidth/2), py = Math.floor(mapHeight/2);
+        worldMap[py][px] = 0;
+        floorCells.push({x: px, y: py});
+        let carved = 1;
+        
+        while(carved < 250) {
+            let dir = Math.floor(Math.random()*4);
+            if(dir === 0 && py > 2) py--;
+            else if(dir === 1 && py < mapHeight-3) py++;
+            else if(dir === 2 && px > 2) px--;
+            else if(dir === 3 && px < mapWidth-3) px++;
+            
+            if (worldMap[py][px] !== 0) {
+                worldMap[py][px] = 0;
+                floorCells.push({x: px, y: py});
+                carved++;
+            }
+        }
+        
+        // Случайные текстуры для стен
+        for(let y=1; y<mapHeight-1; y++) {
+            for(let x=1; x<mapWidth-1; x++) {
+                if(worldMap[y][x] > 0) worldMap[y][x] = Math.random() > 0.5 ? 1 : 2;
+            }
+        }
+
+        // --- ИГРОК, ВРАГИ И ЧАСТИЦЫ ---
         const player = {
-            x: 2.5, y: 2.5,
+            x: floorCells[0].x + 0.5, y: floorCells[0].y + 0.5,
             dirX: 1.0, dirY: 0.0, planeX: 0.0, planeY: 0.66,
             hp: 100, maxHp: 100, ammo: 8, maxAmmo: 8, kills: 0,
             moveSpeed: 4.0, isShooting: false, shootTimer: 0,
@@ -205,14 +232,29 @@
             isDead: false, hasWon: false
         };
 
-        const enemies = [
-            { id: 1, x: 7.5, y: 2.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 },
-            { id: 2, x: 13.5, y: 4.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 },
-            { id: 3, x: 3.5, y: 12.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 },
-            { id: 4, x: 10.5, y: 10.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 },
-            { id: 5, x: 13.5, y: 13.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 }
-        ];
+        const enemies = [];
+        let enemyId = 0;
+        for (let i = 0; i < 15; i++) { // Спавним ~15 врагов
+            let cell = floorCells[Math.floor(Math.random() * floorCells.length)];
+            // Не спавним слишком близко к игроку
+            if (Math.abs(cell.x - player.x) < 4 && Math.abs(cell.y - player.y) < 4) continue;
+            
+            let typeRand = Math.random();
+            let type = 'red', hp = 50, speed = 1.5, dmg = 15;
+            if (typeRand > 0.7) { type = 'green'; hp = 100; speed = 0.8; dmg = 25; } // Танк
+            else if (typeRand > 0.4) { type = 'blue'; hp = 30; speed = 2.5; dmg = 10; } // Быстрый
+            
+            enemies.push({
+                id: ++enemyId, x: cell.x + 0.5, y: cell.y + 0.5,
+                hp: hp, maxHp: hp, speed: speed, type: type, damage: dmg,
+                state: 'idle', hurtTimer: 0, atkTimer: 0
+            });
+        }
         const totalEnemies = enemies.length;
+
+        // Массивы для эффектов выстрела
+        let projectiles = [];
+        let particles = [];
 
         let ZBuffer = new Float64Array(screenWidth);
         let lastTime = performance.now();
@@ -237,9 +279,9 @@
         canvas.addEventListener('mousedown', (e) => {
             if (player.isDead || player.hasWon) return;
             if (document.pointerLockElement !== canvas) {
-                canvas.requestPointerLock(); // Захватываем мышь, если еще не захвачена
+                canvas.requestPointerLock();
             } else if (e.button === 0) {
-                shootWeapon(); // ЛКМ для стрельбы
+                shootWeapon();
             }
         });
 
@@ -247,30 +289,91 @@
             if (document.pointerLockElement === canvas) {
                 isPaused = false;
                 pauseScreen.style.display = 'none';
-                lastTime = performance.now(); // Сброс таймера, чтобы не было рывка
+                lastTime = performance.now();
             } else {
                 isPaused = true;
                 if (!player.isDead && !player.hasWon) pauseScreen.style.display = 'flex';
             }
         });
 
-        // Движение мыши (Поворот камеры)
+        // Движение мыши (Поворот камеры - ИСПРАВЛЕННАЯ ИНВЕРСИЯ)
         document.addEventListener('mousemove', (e) => {
             if (document.pointerLockElement === canvas && !player.isDead && !player.hasWon && !isPaused) {
-                let rotStep = e.movementX * 0.003; // Чувствительность мыши
+                // Положительный шаг для правильного направления вращения
+                let rotStep = e.movementX * 0.003; 
                 
-                // Вращение векторов направления и плоскости камеры
+                // Вращение векторов (Матрица поворота)
                 let oldDirX = player.dirX;
-                player.dirX = player.dirX * Math.cos(-rotStep) - player.dirY * Math.sin(-rotStep);
-                player.dirY = oldDirX * Math.sin(-rotStep) + player.dirY * Math.cos(-rotStep);
+                player.dirX = player.dirX * Math.cos(rotStep) - player.dirY * Math.sin(rotStep);
+                player.dirY = oldDirX * Math.sin(rotStep) + player.dirY * Math.cos(rotStep);
                 let oldPlaneX = player.planeX;
-                player.planeX = player.planeX * Math.cos(-rotStep) - player.planeY * Math.sin(-rotStep);
-                player.planeY = oldPlaneX * Math.sin(-rotStep) + player.planeY * Math.cos(-rotStep);
+                player.planeX = player.planeX * Math.cos(rotStep) - player.planeY * Math.sin(rotStep);
+                player.planeY = oldPlaneX * Math.sin(rotStep) + player.planeY * Math.cos(rotStep);
             }
         });
 
+        // --- ИГРОВАЯ ЛОГИКА И ЭФФЕКТЫ ---
+        function createParticles(x, y, color, count) {
+            for(let i=0; i<count; i++) {
+                particles.push({
+                    x: x, y: y,
+                    vx: (Math.random()-0.5)*4,
+                    vy: (Math.random()-0.5)*4,
+                    life: 0.2 + Math.random()*0.3,
+                    color: color,
+                    isParticle: true
+                });
+            }
+        }
 
-        // --- ИГРОВАЯ ЛОГИКА ---
+        function updateParticles(dt) {
+            for(let i=particles.length-1; i>=0; i--) {
+                let p = particles[i];
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.life -= dt;
+                if(p.life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        function updateProjectiles(dt) {
+            for(let i=projectiles.length-1; i>=0; i--) {
+                let p = projectiles[i];
+                p.x += p.dirX * p.speed * dt;
+                p.y += p.dirY * p.speed * dt;
+                
+                // Столкновение со стеной
+                let mapX = Math.floor(p.x); let mapY = Math.floor(p.y);
+                if(worldMap[mapY] && worldMap[mapY][mapX] > 0) {
+                    createParticles(p.x, p.y, '#ffffaa', 10); // Желтые искры
+                    projectiles.splice(i, 1);
+                    continue;
+                }
+                
+                // Столкновение с врагом
+                let hit = false;
+                for(let enemy of enemies) {
+                    if(enemy.state === 'dead') continue;
+                    let dx = p.x - enemy.x; let dy = p.y - enemy.y;
+                    if(dx*dx + dy*dy < 0.3) { // Радиус хитбокса
+                        enemy.hp -= p.damage;
+                        enemy.hurtTimer = 0.2;
+                        enemy.state = 'chase'; // Агрится
+                        
+                        createParticles(p.x, p.y, '#cc0000', 15); // Брызги крови
+                        
+                        if(enemy.hp <= 0) {
+                            enemy.hp = 0; enemy.state = 'dead';
+                            player.kills++; checkWinCondition(); updateHUD();
+                        }
+                        hit = true;
+                        break;
+                    }
+                }
+                if(hit) projectiles.splice(i, 1);
+            }
+        }
+
         function reloadWeapon() {
             player.isReloading = true;
             player.reloadTimer = 1.0;
@@ -279,43 +382,21 @@
 
         function shootWeapon() {
             if (player.isShooting || player.isReloading || player.isDead || player.hasWon || isPaused) return;
-            
             if (player.ammo <= 0) { reloadWeapon(); return; }
 
             player.ammo--; player.isShooting = true; player.shootTimer = 0.15;
             updateHUD();
 
-            let sortedEnemies = [...enemies].sort((a,b) => {
-                return ((player.x - b.x)**2 + (player.y - b.y)**2) - ((player.x - a.x)**2 + (player.y - a.y)**2);
+            // Создаем летящую пулю (снаряд)
+            projectiles.push({
+                x: player.x + player.dirX * 0.5,
+                y: player.y + player.dirY * 0.5,
+                dirX: player.dirX,
+                dirY: player.dirY,
+                speed: 30.0, // Высокая скорость полета
+                damage: 35,
+                isProjectile: true
             });
-
-            for (let i = 0; i < sortedEnemies.length; i++) {
-                let enemy = sortedEnemies[i];
-                if (enemy.state === 'dead') continue;
-
-                let spriteX = enemy.x - player.x;
-                let spriteY = enemy.y - player.y;
-                let invDet = 1.0 / (player.planeX * player.dirY - player.dirX * player.planeY);
-                let transformX = invDet * (player.dirY * spriteX - player.dirX * spriteY);
-                let transformY = invDet * (-player.planeY * spriteX + player.planeX * spriteY);
-
-                if (transformY > 0 && transformY < ZBuffer[Math.floor(screenWidth/2)]) {
-                    let spriteScreenX = Math.floor((screenWidth / 2) * (1 + transformX / transformY));
-                    let spriteWidth = Math.abs(Math.floor(screenHeight / transformY));
-                    
-                    if (Math.abs(spriteScreenX - screenWidth/2) < spriteWidth / 1.5) {
-                        enemy.hp -= 30; enemy.hurtTimer = 0.2; enemy.state = 'chase';
-                        if (enemy.hp <= 0) {
-                            enemy.hp = 0;
-                            enemy.state = 'dead';
-                            player.kills++;
-                            checkWinCondition();
-                        }
-                        updateHUD();
-                        break;
-                    }
-                }
-            }
         }
 
         function checkWinCondition() {
@@ -353,7 +434,6 @@
             }
         }
 
-
         // --- ИГРОВОЙ ЦИКЛ ---
         function gameLoop() {
             const currentTime = performance.now();
@@ -363,6 +443,8 @@
 
             if (!isPaused && !player.isDead && !player.hasWon) {
                 updatePlayer(dt);
+                updateProjectiles(dt);
+                updateParticles(dt);
                 updateEnemies(dt);
             }
             
@@ -389,7 +471,6 @@
             let isMoving = false;
             let newX = player.x; let newY = player.y;
 
-            // Исправленная логика стрейфа (A и D теперь работают правильно)
             if (keys['KeyW']) { newX += player.dirX * moveStep; newY += player.dirY * moveStep; isMoving = true; }
             if (keys['KeyS']) { newX -= player.dirX * moveStep; newY -= player.dirY * moveStep; isMoving = true; }
             if (keys['KeyA']) { newX += player.dirY * moveStep; newY -= player.dirX * moveStep; isMoving = true; }
@@ -415,13 +496,12 @@
 
                 if (enemy.state === 'chase') {
                     if (dist > 1.2) {
-                        let speed = 1.5 * dt;
-                        let nx = enemy.x + (dx/dist) * speed;
-                        let ny = enemy.y + (dy/dist) * speed;
-                        if (worldMap[Math.floor(enemy.y)][Math.floor(nx)] === 0) enemy.x = nx;
-                        if (worldMap[Math.floor(ny)][Math.floor(enemy.x)] === 0) enemy.y = ny;
+                        let stepX = (dx/dist) * enemy.speed * dt;
+                        let stepY = (dy/dist) * enemy.speed * dt;
+                        if (worldMap[Math.floor(enemy.y)][Math.floor(enemy.x + stepX)] === 0) enemy.x += stepX;
+                        if (worldMap[Math.floor(enemy.y + stepY)][Math.floor(enemy.x)] === 0) enemy.y += stepY;
                     } else if (enemy.atkTimer <= 0) {
-                        takeDamage(15); enemy.atkTimer = 1.5;
+                        takeDamage(enemy.damage); enemy.atkTimer = 1.5;
                     }
                 }
             }
@@ -491,14 +571,17 @@
             }
         }
 
+        // Отрисовка всех объектов: враги, снаряды, частицы
         function drawSprites() {
-            let sortedSprites = [...enemies].sort((a,b) => {
+            let entities = [...enemies, ...projectiles, ...particles];
+            
+            entities.sort((a,b) => {
                 return ((player.x - b.x)**2 + (player.y - b.y)**2) - ((player.x - a.x)**2 + (player.y - a.y)**2);
             });
 
-            for (let i = 0; i < sortedSprites.length; i++) {
-                let sprite = sortedSprites[i];
-                let spriteX = sprite.x - player.x; let spriteY = sprite.y - player.y;
+            for (let i = 0; i < entities.length; i++) {
+                let ent = entities[i];
+                let spriteX = ent.x - player.x; let spriteY = ent.y - player.y;
 
                 let invDet = 1.0 / (player.planeX * player.dirY - player.dirX * player.planeY);
                 let transformX = invDet * (player.dirY * spriteX - player.dirX * spriteY);
@@ -506,28 +589,49 @@
 
                 if (transformY > 0) {
                     let spriteScreenX = Math.floor((screenWidth / 2) * (1 + transformX / transformY));
-                    let vMove = sprite.state === 'dead' ? 64 : Math.sin(performance.now()/200)*10; 
+                    
+                    let vMove = 0;
+                    if(ent.state === 'dead') vMove = 64;
+                    else if(ent.hp) vMove = Math.sin(performance.now()/200)*10;
+                    
                     let vMoveScreen = Math.floor(vMove / transformY);
 
-                    let spriteHeight = Math.abs(Math.floor(screenHeight / transformY));
+                    // Масштабирование размера (Враг = 1, Пуля = 0.1, Искры = 0.05)
+                    let isSprite = !ent.isParticle && !ent.isProjectile;
+                    let sizeMult = isSprite ? 1.0 : (ent.isProjectile ? 0.15 : 0.05);
+
+                    let spriteHeight = Math.abs(Math.floor(screenHeight / transformY)) * sizeMult;
                     let drawStartY = -spriteHeight / 2 + screenHeight / 2 + vMoveScreen;
                     let drawEndY = spriteHeight / 2 + screenHeight / 2 + vMoveScreen;
 
-                    let spriteWidth = Math.abs(Math.floor(screenHeight / transformY));
+                    let spriteWidth = Math.abs(Math.floor(screenHeight / transformY)) * sizeMult;
                     let drawStartX = -spriteWidth / 2 + spriteScreenX;
                     let drawEndX = spriteWidth / 2 + spriteScreenX;
 
                     let clipStartX = Math.max(0, drawStartX);
                     let clipEndX = Math.min(screenWidth - 1, drawEndX);
 
-                    let tex = texEnemy;
-                    if (sprite.state === 'dead') tex = texEnemyDead;
-                    else if (sprite.hurtTimer > 0) tex = texEnemyHurt;
-
-                    for (let stripe = clipStartX; stripe < clipEndX; stripe++) {
-                        let texX = Math.floor(256 * (stripe - (-spriteWidth / 2 + spriteScreenX)) * texWidth / spriteWidth) / 256;
-                        if (transformY < ZBuffer[Math.floor(stripe)]) {
-                            ctx.drawImage(tex, texX, 0, 1, texHeight, stripe, drawStartY, 1, drawEndY - drawStartY);
+                    if (isSprite) {
+                        let tex = getEnemyTexture(ent);
+                        for (let stripe = clipStartX; stripe < clipEndX; stripe++) {
+                            let texX = Math.floor(256 * (stripe - (-spriteWidth / 2 + spriteScreenX)) * texWidth / spriteWidth) / 256;
+                            if (transformY < ZBuffer[Math.floor(stripe)]) {
+                                ctx.drawImage(tex, texX, 0, 1, texHeight, stripe, drawStartY, 1, drawEndY - drawStartY);
+                            }
+                        }
+                    } else if (ent.isProjectile) {
+                        ctx.fillStyle = '#ffff00'; // Желтая пуля
+                        for (let stripe = clipStartX; stripe < clipEndX; stripe++) {
+                            if (transformY < ZBuffer[Math.floor(stripe)]) {
+                                ctx.fillRect(stripe, drawStartY, 1, drawEndY - drawStartY);
+                            }
+                        }
+                    } else if (ent.isParticle) {
+                        ctx.fillStyle = ent.color; // Искры/Кровь
+                        for (let stripe = clipStartX; stripe < clipEndX; stripe++) {
+                            if (transformY < ZBuffer[Math.floor(stripe)]) {
+                                ctx.fillRect(stripe, drawStartY, 1, drawEndY - drawStartY);
+                            }
                         }
                     }
                 }
@@ -543,9 +647,17 @@
 
             if (player.isShooting) {
                 gunY += 20; gunX += 5;
+                // Вспышка на весь экран
                 ctx.fillStyle = 'rgba(255, 255, 200, 0.3)'; ctx.fillRect(0, 0, screenWidth, screenHeight);
+                
+                // Вспышка пламени из ствола
+                ctx.fillStyle = '#ffaa00';
+                ctx.beginPath(); ctx.arc(gunX - 5, gunY - 90, 20 + Math.random()*15, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath(); ctx.arc(gunX - 5, gunY - 90, 10 + Math.random()*5, 0, Math.PI*2); ctx.fill();
             }
 
+            // Отрисовка дробовика
             ctx.fillStyle = '#222';
             ctx.beginPath(); ctx.moveTo(gunX - 30, gunY); ctx.lineTo(gunX - 20, gunY - 80); ctx.lineTo(gunX, gunY - 80); ctx.lineTo(gunX, gunY); ctx.fill();
             ctx.fillStyle = '#2a2a2a';
