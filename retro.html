@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Браузерный Ретро-Шутер (Мышь + Убийства)</title>
+    <style>
+        body {
+            margin: 0; padding: 0; background-color: #000;
+            color: #fff; font-family: 'Courier New', Courier, monospace;
+            overflow: hidden; user-select: none;
+        }
+
+        #gameCanvas {
+            display: block; width: 100vw; height: 100vh;
+            image-rendering: pixelated; object-fit: cover;
+            cursor: crosshair;
+        }
+
+        /* UI Интерфейс */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: flex; flex-direction: column;
+            justify-content: space-between; z-index: 10;
+        }
+
+        .hud-top {
+            display: flex; justify-content: space-between; padding: 20px;
+            text-shadow: 2px 2px 0 #000; font-size: 24px; font-weight: bold;
+        }
+
+        .hud-bottom {
+            display: flex; justify-content: center; padding: 20px;
+            text-shadow: 2px 2px 0 #000; font-size: 18px; color: #aaa;
+        }
+
+        #health { color: #ff3333; }
+        #kills { color: #33ff33; }
+        #ammo { color: #ffcc00; }
+        
+        #damage-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 0, 0, 0); pointer-events: none; z-index: 5;
+            transition: background 0.1s;
+        }
+
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            transform: translate(-50%, -50%); pointer-events: none; z-index: 10;
+        }
+        #crosshair::before, #crosshair::after {
+            content: ''; position: absolute; background: rgba(0, 255, 0, 0.7);
+        }
+        #crosshair::before { top: 9px; left: 0; width: 20px; height: 2px; }
+        #crosshair::after { top: 0; left: 9px; width: 2px; height: 20px; }
+
+        /* Экраны (Пауза, Конец игры, Победа) */
+        .overlay-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 20; pointer-events: auto;
+        }
+        
+        #pause-screen { background: rgba(0,0,0,0.6); }
+        #message-screen, #win-screen { display: none; }
+        
+        .title-text { font-size: 48px; margin-bottom: 20px; text-transform: uppercase; }
+        .red-text { color: #ff3333; text-shadow: 3px 3px 0 #550000; }
+        .green-text { color: #33ff33; text-shadow: 3px 3px 0 #005500; }
+        .white-text { color: #ffffff; text-shadow: 3px 3px 0 #555555; }
+        
+        button {
+            padding: 15px 30px; font-size: 20px; font-family: 'Courier New', Courier, monospace;
+            background: #ffcc00; color: #000; border: 4px solid #fff; cursor: pointer;
+            text-transform: uppercase; font-weight: bold; transition: 0.2s;
+        }
+        button:hover { background: #fff; transform: scale(1.05); }
+        .hint { margin-top: 15px; color: #aaa; font-size: 16px; }
+
+    </style>
+</head>
+<body>
+
+    <div id="damage-overlay"></div>
+    <div id="ui-layer">
+        <div class="hud-top">
+            <div id="health">ЗДОРОВЬЕ: 100</div>
+            <div id="kills">УБИТО: 0/5</div>
+            <div id="ammo">ПАТРОНЫ: 8/8</div>
+        </div>
+        <div class="hud-bottom">
+            [W,A,S,D] - Ходьба | [Мышь] - Обзор | [ЛКМ] - Стрелять | [R] - Перезарядка
+        </div>
+    </div>
+    
+    <div id="crosshair"></div>
+
+    <!-- Экран паузы (для захвата мыши) -->
+    <div id="pause-screen" class="overlay-screen">
+        <div class="title-text white-text">ИГРА НА ПАУЗЕ</div>
+        <button id="btn-start">Кликните, чтобы играть</button>
+        <div class="hint">Нажмите ESC, чтобы выйти в меню паузы</div>
+    </div>
+
+    <!-- Экран смерти -->
+    <div id="message-screen" class="overlay-screen">
+        <div class="title-text red-text">ВЫ ПОГИБЛИ</div>
+        <button onclick="location.reload()">Начать заново</button>
+    </div>
+
+    <!-- Экран победы -->
+    <div id="win-screen" class="overlay-screen">
+        <div class="title-text green-text">СЕКТОР ЗАЧИЩЕН!</div>
+        <button onclick="location.reload()">Играть снова</button>
+    </div>
+
+    <canvas id="gameCanvas" width="320" height="240"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        const screenWidth = canvas.width;
+        const screenHeight = canvas.height;
+
+        // UI Элементы
+        const hpEl = document.getElementById('health');
+        const ammoEl = document.getElementById('ammo');
+        const killsEl = document.getElementById('kills');
+        const dmgOverlay = document.getElementById('damage-overlay');
+        const pauseScreen = document.getElementById('pause-screen');
+        const msgScreen = document.getElementById('message-screen');
+        const winScreen = document.getElementById('win-screen');
+
+        let isPaused = true;
+
+        // --- ГЕНЕРАЦИЯ ТЕКСТУР ---
+        const texWidth = 64; const texHeight = 64; const textures = [];
+        function createTexture(generatorFunc) {
+            const c = document.createElement('canvas');
+            c.width = texWidth; c.height = texHeight;
+            generatorFunc(c.getContext('2d'));
+            return c;
+        }
+
+        textures[1] = createTexture(cx => { // Кирпич
+            cx.fillStyle = '#8B0000'; cx.fillRect(0,0,64,64);
+            cx.fillStyle = '#4a0000';
+            for(let y=0; y<64; y+=16) {
+                cx.fillRect(0, y, 64, 2);
+                for(let x=0; x<64; x+=16) cx.fillRect(x + (y%32===0?0:8), y, 2, 16);
+            }
+        });
+        textures[2] = createTexture(cx => { // Металл
+            cx.fillStyle = '#555'; cx.fillRect(0,0,64,64);
+            cx.fillStyle = '#333'; cx.fillRect(0,0,64,4); cx.fillRect(0,60,64,4);
+            cx.fillRect(0,0,4,64); cx.fillRect(60,0,4,64);
+            cx.fillStyle = '#222'; cx.beginPath(); cx.arc(8,8,3,0,Math.PI*2); cx.fill();
+            cx.beginPath(); cx.arc(56,56,3,0,Math.PI*2); cx.fill();
+        });
+
+        // Спрайты врага
+        const texEnemy = createTexture(cx => {
+            cx.fillStyle = '#cc0000'; cx.beginPath(); cx.arc(32,28,24,0,Math.PI*2); cx.fill();
+            cx.fillStyle = '#fff'; cx.beginPath(); cx.arc(32,24,12,0,Math.PI*2); cx.fill();
+            cx.fillStyle = '#000'; cx.beginPath(); cx.arc(32,24,5,0,Math.PI*2); cx.fill();
+            cx.fillStyle = '#222'; cx.fillRect(20, 40, 24, 8);
+            cx.fillStyle = '#fff'; cx.fillRect(22, 40, 4, 4); cx.fillRect(28, 40, 4, 4); cx.fillRect(34, 40, 4, 4);
+        });
+        const texEnemyHurt = createTexture(cx => {
+            cx.fillStyle = '#fff'; cx.beginPath(); cx.arc(32,28,24,0,Math.PI*2); cx.fill();
+        });
+        const texEnemyDead = createTexture(cx => {
+            cx.fillStyle = '#8a0303'; cx.beginPath(); cx.ellipse(32, 56, 28, 8, 0, 0, Math.PI*2); cx.fill();
+            cx.fillStyle = '#520101'; cx.beginPath(); cx.ellipse(32, 54, 15, 5, 0, 0, Math.PI*2); cx.fill();
+        });
+
+        // --- ИГРОВАЯ КАРТА ---
+        const mapWidth = 16; const mapHeight = 16;
+        const worldMap = [
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,1,0,0,2,2,0,0,0,0,1],
+            [1,0,0,2,2,0,1,0,0,2,0,0,0,0,0,1],
+            [1,0,0,2,0,0,0,0,0,2,0,0,0,0,0,1],
+            [1,0,0,2,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1],
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,2,2,2,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,2,0,0,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ];
+
+        // --- ИГРОК И ВРАГИ ---
+        const player = {
+            x: 2.5, y: 2.5,
+            dirX: 1.0, dirY: 0.0, planeX: 0.0, planeY: 0.66,
+            hp: 100, maxHp: 100, ammo: 8, maxAmmo: 8, kills: 0,
+            moveSpeed: 4.0, isShooting: false, shootTimer: 0,
+            isReloading: false, reloadTimer: 0, weaponSway: 0,
+            isDead: false, hasWon: false
+        };
+
+        const enemies = [
+            { id: 1, x: 7.5, y: 2.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 },
+            { id: 2, x: 13.5, y: 4.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 },
+            { id: 3, x: 3.5, y: 12.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 },
+            { id: 4, x: 10.5, y: 10.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 },
+            { id: 5, x: 13.5, y: 13.5, hp: 50, state: 'idle', hurtTimer: 0, atkTimer: 0 }
+        ];
+        const totalEnemies = enemies.length;
+
+        let ZBuffer = new Float64Array(screenWidth);
+        let lastTime = performance.now();
+        const keys = {};
+
+        // --- УПРАВЛЕНИЕ (КЛАВИАТУРА И МЫШЬ) ---
+        window.addEventListener('keydown', e => { 
+            keys[e.code] = true;
+            if (e.code === 'KeyR' && !player.isReloading && player.ammo < player.maxAmmo && !isPaused) {
+                reloadWeapon();
+            }
+            if (e.code === 'Space' && !player.isDead && !isPaused) {
+                shootWeapon();
+            }
+        });
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        // Pointer Lock API (Захват мыши)
+        document.getElementById('btn-start').addEventListener('click', () => {
+            canvas.requestPointerLock();
+        });
+        canvas.addEventListener('mousedown', (e) => {
+            if (player.isDead || player.hasWon) return;
+            if (document.pointerLockElement !== canvas) {
+                canvas.requestPointerLock(); // Захватываем мышь, если еще не захвачена
+            } else if (e.button === 0) {
+                shootWeapon(); // ЛКМ для стрельбы
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement === canvas) {
+                isPaused = false;
+                pauseScreen.style.display = 'none';
+                lastTime = performance.now(); // Сброс таймера, чтобы не было рывка
+            } else {
+                isPaused = true;
+                if (!player.isDead && !player.hasWon) pauseScreen.style.display = 'flex';
+            }
+        });
+
+        // Движение мыши (Поворот камеры)
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === canvas && !player.isDead && !player.hasWon && !isPaused) {
+                let rotStep = e.movementX * 0.003; // Чувствительность мыши
+                
+                // Вращение векторов направления и плоскости камеры
+                let oldDirX = player.dirX;
+                player.dirX = player.dirX * Math.cos(-rotStep) - player.dirY * Math.sin(-rotStep);
+                player.dirY = oldDirX * Math.sin(-rotStep) + player.dirY * Math.cos(-rotStep);
+                let oldPlaneX = player.planeX;
+                player.planeX = player.planeX * Math.cos(-rotStep) - player.planeY * Math.sin(-rotStep);
+                player.planeY = oldPlaneX * Math.sin(-rotStep) + player.planeY * Math.cos(-rotStep);
+            }
+        });
+
+
+        // --- ИГРОВАЯ ЛОГИКА ---
+        function reloadWeapon() {
+            player.isReloading = true;
+            player.reloadTimer = 1.0;
+            updateHUD();
+        }
+
+        function shootWeapon() {
+            if (player.isShooting || player.isReloading || player.isDead || player.hasWon || isPaused) return;
+            
+            if (player.ammo <= 0) { reloadWeapon(); return; }
+
+            player.ammo--; player.isShooting = true; player.shootTimer = 0.15;
+            updateHUD();
+
+            let sortedEnemies = [...enemies].sort((a,b) => {
+                return ((player.x - b.x)**2 + (player.y - b.y)**2) - ((player.x - a.x)**2 + (player.y - a.y)**2);
+            });
+
+            for (let i = 0; i < sortedEnemies.length; i++) {
+                let enemy = sortedEnemies[i];
+                if (enemy.state === 'dead') continue;
+
+                let spriteX = enemy.x - player.x;
+                let spriteY = enemy.y - player.y;
+                let invDet = 1.0 / (player.planeX * player.dirY - player.dirX * player.planeY);
+                let transformX = invDet * (player.dirY * spriteX - player.dirX * spriteY);
+                let transformY = invDet * (-player.planeY * spriteX + player.planeX * spriteY);
+
+                if (transformY > 0 && transformY < ZBuffer[Math.floor(screenWidth/2)]) {
+                    let spriteScreenX = Math.floor((screenWidth / 2) * (1 + transformX / transformY));
+                    let spriteWidth = Math.abs(Math.floor(screenHeight / transformY));
+                    
+                    if (Math.abs(spriteScreenX - screenWidth/2) < spriteWidth / 1.5) {
+                        enemy.hp -= 30; enemy.hurtTimer = 0.2; enemy.state = 'chase';
+                        if (enemy.hp <= 0) {
+                            enemy.hp = 0;
+                            enemy.state = 'dead';
+                            player.kills++;
+                            checkWinCondition();
+                        }
+                        updateHUD();
+                        break;
+                    }
+                }
+            }
+        }
+
+        function checkWinCondition() {
+            if (player.kills >= totalEnemies) {
+                player.hasWon = true;
+                document.exitPointerLock();
+                winScreen.style.display = 'flex';
+            }
+        }
+
+        function takeDamage(amt) {
+            if (player.isDead || player.hasWon) return;
+            player.hp -= amt;
+            
+            dmgOverlay.style.background = 'rgba(255, 0, 0, 0.4)';
+            setTimeout(() => dmgOverlay.style.background = 'rgba(255, 0, 0, 0)', 100);
+
+            if (player.hp <= 0) {
+                player.hp = 0; player.isDead = true;
+                document.exitPointerLock();
+                msgScreen.style.display = 'flex';
+            }
+            updateHUD();
+        }
+
+        function updateHUD() {
+            hpEl.innerText = `ЗДОРОВЬЕ: ${player.hp}`;
+            killsEl.innerText = `УБИТО: ${player.kills}/${totalEnemies}`;
+            
+            if (player.isReloading) {
+                ammoEl.innerText = `ПЕРЕЗАРЯДКА...`; ammoEl.style.color = '#ff3333';
+            } else {
+                ammoEl.innerText = `ПАТРОНЫ: ${player.ammo}/${player.maxAmmo}`;
+                ammoEl.style.color = player.ammo === 0 ? '#ff3333' : '#ffcc00';
+            }
+        }
+
+
+        // --- ИГРОВОЙ ЦИКЛ ---
+        function gameLoop() {
+            const currentTime = performance.now();
+            let dt = (currentTime - lastTime) / 1000.0;
+            if (dt > 0.1) dt = 0.1;
+            lastTime = currentTime;
+
+            if (!isPaused && !player.isDead && !player.hasWon) {
+                updatePlayer(dt);
+                updateEnemies(dt);
+            }
+            
+            drawWorld();
+            drawSprites();
+            if (!player.isDead) drawWeapon();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function updatePlayer(dt) {
+            if (player.shootTimer > 0) {
+                player.shootTimer -= dt;
+                if (player.shootTimer <= 0) player.isShooting = false;
+            }
+            if (player.isReloading) {
+                player.reloadTimer -= dt;
+                if (player.reloadTimer <= 0) {
+                    player.isReloading = false; player.ammo = player.maxAmmo; updateHUD();
+                }
+            }
+
+            let moveStep = player.moveSpeed * dt;
+            let isMoving = false;
+            let newX = player.x; let newY = player.y;
+
+            // Исправленная логика стрейфа (A и D теперь работают правильно)
+            if (keys['KeyW']) { newX += player.dirX * moveStep; newY += player.dirY * moveStep; isMoving = true; }
+            if (keys['KeyS']) { newX -= player.dirX * moveStep; newY -= player.dirY * moveStep; isMoving = true; }
+            if (keys['KeyA']) { newX += player.dirY * moveStep; newY -= player.dirX * moveStep; isMoving = true; }
+            if (keys['KeyD']) { newX -= player.dirY * moveStep; newY += player.dirX * moveStep; isMoving = true; }
+
+            if (worldMap[Math.floor(player.y)][Math.floor(newX)] === 0) player.x = newX;
+            if (worldMap[Math.floor(newY)][Math.floor(player.x)] === 0) player.y = newY;
+
+            if (isMoving) player.weaponSway += dt * 10;
+            else player.weaponSway = Math.sin(player.weaponSway) * 0.5;
+        }
+
+        function updateEnemies(dt) {
+            for (let enemy of enemies) {
+                if (enemy.state === 'dead') continue;
+                if (enemy.hurtTimer > 0) enemy.hurtTimer -= dt;
+                if (enemy.atkTimer > 0) enemy.atkTimer -= dt;
+
+                let dx = player.x - enemy.x; let dy = player.y - enemy.y;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (dist < 8) enemy.state = 'chase'; // Агро-радиус
+
+                if (enemy.state === 'chase') {
+                    if (dist > 1.2) {
+                        let speed = 1.5 * dt;
+                        let nx = enemy.x + (dx/dist) * speed;
+                        let ny = enemy.y + (dy/dist) * speed;
+                        if (worldMap[Math.floor(enemy.y)][Math.floor(nx)] === 0) enemy.x = nx;
+                        if (worldMap[Math.floor(ny)][Math.floor(enemy.x)] === 0) enemy.y = ny;
+                    } else if (enemy.atkTimer <= 0) {
+                        takeDamage(15); enemy.atkTimer = 1.5;
+                    }
+                }
+            }
+        }
+
+        function drawWorld() {
+            let ceilingGrad = ctx.createLinearGradient(0, 0, 0, screenHeight/2);
+            ceilingGrad.addColorStop(0, "#111"); ceilingGrad.addColorStop(1, "#333");
+            ctx.fillStyle = ceilingGrad; ctx.fillRect(0, 0, screenWidth, screenHeight/2);
+            
+            let floorGrad = ctx.createLinearGradient(0, screenHeight/2, 0, screenHeight);
+            floorGrad.addColorStop(0, "#222"); floorGrad.addColorStop(1, "#4d3319");
+            ctx.fillStyle = floorGrad; ctx.fillRect(0, screenHeight/2, screenWidth, screenHeight/2);
+
+            for (let x = 0; x < screenWidth; x++) {
+                let cameraX = 2 * x / screenWidth - 1; 
+                let rayDirX = player.dirX + player.planeX * cameraX;
+                let rayDirY = player.dirY + player.planeY * cameraX;
+
+                let mapX = Math.floor(player.x); let mapY = Math.floor(player.y);
+                let sideDistX, sideDistY;
+                let deltaDistX = Math.abs(1 / rayDirX); let deltaDistY = Math.abs(1 / rayDirY);
+                let perpWallDist;
+                let stepX, stepY, hit = 0, side;
+
+                if (rayDirX < 0) { stepX = -1; sideDistX = (player.x - mapX) * deltaDistX; } 
+                else { stepX = 1; sideDistX = (mapX + 1.0 - player.x) * deltaDistX; }
+                if (rayDirY < 0) { stepY = -1; sideDistY = (player.y - mapY) * deltaDistY; } 
+                else { stepY = 1; sideDistY = (mapY + 1.0 - player.y) * deltaDistY; }
+
+                while (hit === 0) {
+                    if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; } 
+                    else { sideDistY += deltaDistY; mapY += stepY; side = 1; }
+                    
+                    if (mapY >= 0 && mapY < mapHeight && mapX >= 0 && mapX < mapWidth) {
+                        if (worldMap[mapY][mapX] > 0) hit = 1;
+                    } else hit = 1;
+                }
+
+                if (side === 0) perpWallDist = (sideDistX - deltaDistX);
+                else            perpWallDist = (sideDistY - deltaDistY);
+
+                ZBuffer[x] = perpWallDist;
+
+                let lineHeight = Math.floor(screenHeight / perpWallDist);
+                let drawStart = -lineHeight / 2 + screenHeight / 2;
+                if (drawStart < 0) drawStart = 0;
+                let drawEnd = lineHeight / 2 + screenHeight / 2;
+                if (drawEnd >= screenHeight) drawEnd = screenHeight - 1;
+
+                let texNum = worldMap[mapY][mapX] || 1;
+                let wallX;
+                if (side === 0) wallX = player.y + perpWallDist * rayDirY;
+                else            wallX = player.x + perpWallDist * rayDirX;
+                wallX -= Math.floor(wallX);
+
+                let texX = Math.floor(wallX * texWidth);
+                if (side === 0 && rayDirX > 0) texX = texWidth - texX - 1;
+                if (side === 1 && rayDirY < 0) texX = texWidth - texX - 1;
+
+                ctx.drawImage(textures[texNum], texX, 0, 1, texHeight, x, drawStart, 1, drawEnd - drawStart);
+
+                let shadow = perpWallDist * 0.08;
+                if (side === 1) shadow += 0.3;
+                if (shadow > 1) shadow = 1;
+                ctx.fillStyle = `rgba(0, 0, 0, ${shadow})`; ctx.fillRect(x, drawStart, 1, drawEnd - drawStart);
+            }
+        }
+
+        function drawSprites() {
+            let sortedSprites = [...enemies].sort((a,b) => {
+                return ((player.x - b.x)**2 + (player.y - b.y)**2) - ((player.x - a.x)**2 + (player.y - a.y)**2);
+            });
+
+            for (let i = 0; i < sortedSprites.length; i++) {
+                let sprite = sortedSprites[i];
+                let spriteX = sprite.x - player.x; let spriteY = sprite.y - player.y;
+
+                let invDet = 1.0 / (player.planeX * player.dirY - player.dirX * player.planeY);
+                let transformX = invDet * (player.dirY * spriteX - player.dirX * spriteY);
+                let transformY = invDet * (-player.planeY * spriteX + player.planeX * spriteY);
+
+                if (transformY > 0) {
+                    let spriteScreenX = Math.floor((screenWidth / 2) * (1 + transformX / transformY));
+                    let vMove = sprite.state === 'dead' ? 64 : Math.sin(performance.now()/200)*10; 
+                    let vMoveScreen = Math.floor(vMove / transformY);
+
+                    let spriteHeight = Math.abs(Math.floor(screenHeight / transformY));
+                    let drawStartY = -spriteHeight / 2 + screenHeight / 2 + vMoveScreen;
+                    let drawEndY = spriteHeight / 2 + screenHeight / 2 + vMoveScreen;
+
+                    let spriteWidth = Math.abs(Math.floor(screenHeight / transformY));
+                    let drawStartX = -spriteWidth / 2 + spriteScreenX;
+                    let drawEndX = spriteWidth / 2 + spriteScreenX;
+
+                    let clipStartX = Math.max(0, drawStartX);
+                    let clipEndX = Math.min(screenWidth - 1, drawEndX);
+
+                    let tex = texEnemy;
+                    if (sprite.state === 'dead') tex = texEnemyDead;
+                    else if (sprite.hurtTimer > 0) tex = texEnemyHurt;
+
+                    for (let stripe = clipStartX; stripe < clipEndX; stripe++) {
+                        let texX = Math.floor(256 * (stripe - (-spriteWidth / 2 + spriteScreenX)) * texWidth / spriteWidth) / 256;
+                        if (transformY < ZBuffer[Math.floor(stripe)]) {
+                            ctx.drawImage(tex, texX, 0, 1, texHeight, stripe, drawStartY, 1, drawEndY - drawStartY);
+                        }
+                    }
+                }
+            }
+        }
+
+        function drawWeapon() {
+            let swayX = Math.cos(player.weaponSway) * 10;
+            let swayY = Math.abs(Math.sin(player.weaponSway)) * 10;
+            let gunX = screenWidth / 2 + swayX; let gunY = screenHeight + swayY;
+
+            if (player.isReloading) gunY += 150 * Math.sin((1 - player.reloadTimer) * Math.PI); 
+
+            if (player.isShooting) {
+                gunY += 20; gunX += 5;
+                ctx.fillStyle = 'rgba(255, 255, 200, 0.3)'; ctx.fillRect(0, 0, screenWidth, screenHeight);
+            }
+
+            ctx.fillStyle = '#222';
+            ctx.beginPath(); ctx.moveTo(gunX - 30, gunY); ctx.lineTo(gunX - 20, gunY - 80); ctx.lineTo(gunX, gunY - 80); ctx.lineTo(gunX, gunY); ctx.fill();
+            ctx.fillStyle = '#2a2a2a';
+            ctx.beginPath(); ctx.moveTo(gunX, gunY); ctx.lineTo(gunX, gunY - 80); ctx.lineTo(gunX + 20, gunY - 80); ctx.lineTo(gunX + 30, gunY); ctx.fill();
+            ctx.fillStyle = '#555'; ctx.fillRect(gunX - 15, gunY - 78, 5, 78); ctx.fillRect(gunX + 5, gunY - 78, 5, 78);
+            ctx.fillStyle = '#000'; ctx.fillRect(gunX - 20, gunY - 80, 40, 5);
+        }
+
+        // Запуск
+        updateHUD();
+        requestAnimationFrame(gameLoop);
+
+    </script>
+</body>
+</html>
